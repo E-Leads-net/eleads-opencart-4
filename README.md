@@ -9,3 +9,8 @@
 - build/releases/eleads-opencart-4.x.ocmod.zip
 
 Repository: https://github.com/E-Leads-net/eleads-opencart-4
+
+# Changelog
+
+## 0.1.7
+- Initial split repository release

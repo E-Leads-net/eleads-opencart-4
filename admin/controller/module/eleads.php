@@ -278,6 +278,18 @@ class Eleads extends \Opencart\System\Engine\Controller {
 	}
 
 	public function install(): void {
+		$this->load->model('user/user_group');
+		$routes = [
+			'extension/eleads/module/eleads',
+			'extension/eleads/module/eleads.save',
+			'extension/eleads/module/eleads.update',
+			'extension/eleads/module/eleads.apikey',
+		];
+		foreach ($routes as $route) {
+			$this->model_user_user_group->addPermission($this->user->getGroupId(), 'access', $route);
+			$this->model_user_user_group->addPermission($this->user->getGroupId(), 'modify', $route);
+		}
+
 		$this->load->model('setting/event');
 		$this->model_setting_event->deleteEventByCode('eleads_product_add');
 		$this->model_setting_event->deleteEventByCode('eleads_product_edit');
@@ -309,6 +321,18 @@ class Eleads extends \Opencart\System\Engine\Controller {
 	}
 
 	public function uninstall(): void {
+		$this->load->model('user/user_group');
+		$routes = [
+			'extension/eleads/module/eleads',
+			'extension/eleads/module/eleads.save',
+			'extension/eleads/module/eleads.update',
+			'extension/eleads/module/eleads.apikey',
+		];
+		foreach ($routes as $route) {
+			$this->model_user_user_group->removePermission($this->user->getGroupId(), 'access', $route);
+			$this->model_user_user_group->removePermission($this->user->getGroupId(), 'modify', $route);
+		}
+
 		$this->load->model('setting/event');
 		$this->model_setting_event->deleteEventByCode('eleads_product_add');
 		$this->model_setting_event->deleteEventByCode('eleads_product_edit');
