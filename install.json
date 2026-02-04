@@ -4,7 +4,7 @@
   "name": "E-Leads Feed",
   "description": "E-Leads Feed module for OpenCart 4",
   "code": "eleads",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "author": "E-Leads",
   "link": "https://github.com/E-Leads-net/eleads-opencart-4"
 }
