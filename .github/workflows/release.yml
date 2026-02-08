@@ -22,10 +22,9 @@ jobs:
           mkdir -p build/releases
           stage="$(mktemp -d)"
           cp install.json "$stage/install.json"
-          cp -R admin "$stage/admin"
-          cp -R catalog "$stage/catalog"
-          cp -R system "$stage/system"
-          (cd "$stage" && zip -qr "$GITHUB_WORKSPACE/build/releases/eleads-opencart-4.x.ocmod.zip" install.json admin catalog system)
+          mkdir -p "$stage/extension"
+          cp -R extension/eleads "$stage/extension/eleads"
+          (cd "$stage" && zip -qr "$GITHUB_WORKSPACE/build/releases/eleads-opencart-4.x.ocmod.zip" install.json extension)
           rm -rf "$stage"
 
       - name: Publish GitHub release

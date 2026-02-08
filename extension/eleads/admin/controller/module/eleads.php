@@ -43,6 +43,7 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		$data['button_save'] = $this->language->get('button_save');
 		$data['button_back'] = $this->language->get('button_back');
 		$data['tab_export'] = $this->language->get('tab_export');
+		$data['tab_seo'] = $this->language->get('tab_seo');
 		$data['tab_api'] = $this->language->get('tab_api');
 		$data['tab_update'] = $this->language->get('tab_update');
 		$data['entry_status'] = $this->language->get('entry_status');
@@ -62,6 +63,8 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		$data['entry_picture_limit'] = $this->language->get('entry_picture_limit');
 		$data['entry_image_size'] = $this->language->get('entry_image_size');
 		$data['entry_short_description_source'] = $this->language->get('entry_short_description_source');
+		$data['entry_seo_pages'] = $this->language->get('entry_seo_pages');
+		$data['text_seo_url_disabled'] = $this->language->get('text_seo_url_disabled');
 		$data['help_image_size'] = $this->language->get('help_image_size');
 		$data['text_update'] = $this->language->get('text_update');
 		$data['text_api_key_required'] = $this->language->get('text_api_key_required');
@@ -81,15 +84,33 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		$api_key = trim((string)$this->config->get('module_eleads_api_key'));
 		$api_key_valid = false;
 		$api_key_error = '';
+		$seo_available = true;
+		$seo_status = null;
 		if ($api_key !== '') {
-			$api_key_valid = $this->checkApiKeyStatus($api_key);
+			$status = $this->getApiKeyStatusData($api_key);
+			$api_key_valid = !empty($status['ok']);
+			$seo_status = $status !== null ? (!empty($status['seo_status'])) : null;
 			if (!$api_key_valid) {
 				$api_key_error = 'invalid';
 			}
 		}
+		if ($seo_status === false) {
+			$seo_available = false;
+			$settings_current = $this->model_setting_setting->getSetting('module_eleads');
+			if (!empty($settings_current['module_eleads_seo_pages_enabled'])) {
+				$settings_current['module_eleads_seo_pages_enabled'] = 0;
+				$this->model_setting_setting->editSetting('module_eleads', $settings_current);
+			}
+			$this->syncSeoSitemap(false, (string)$api_key, $settings_current);
+		}
 
 		$settings = $this->model_setting_setting->getSetting('module_eleads');
 		$data = array_merge($data, $this->prepareSettingsData($settings));
+		if (!$seo_available) {
+			$data['module_eleads_seo_pages_enabled'] = 0;
+		}
+		$data['seo_url_enabled'] = (bool)$this->config->get('config_seo_url');
+		$data['seo_tab_available'] = $seo_available;
 		$data['api_key_required'] = !$api_key_valid;
 		$data['api_key_value'] = $api_key;
 		$data['api_key_error'] = $api_key_error;
@@ -148,11 +169,17 @@ class Eleads extends \Opencart\System\Engine\Controller {
 
 		if (!$json) {
 			$this->load->model('setting/setting');
+			$settings_current = $this->model_setting_setting->getSetting('module_eleads');
+			$seo_prev = !empty($settings_current['module_eleads_seo_pages_enabled']);
 			$this->model_setting_setting->editSetting('module_eleads', $this->request->post);
 			$this->syncWidgetLoaderTag(
 				!empty($this->request->post['module_eleads_status']),
 				(string)($this->request->post['module_eleads_api_key'] ?? $api_key)
 			);
+			$seo_new = !empty($this->request->post['module_eleads_seo_pages_enabled']);
+			if ($seo_prev !== $seo_new || $seo_new) {
+				$this->syncSeoSitemap($seo_new, (string)$api_key, $this->request->post);
+			}
 			$json['success'] = $this->language->get('text_success');
 		}
 
@@ -246,12 +273,17 @@ class Eleads extends \Opencart\System\Engine\Controller {
 	}
 
 	private function checkApiKeyStatus(string $api_key): bool {
+		$status = $this->getApiKeyStatusData($api_key);
+		return is_array($status) && !empty($status['ok']);
+	}
+
+	private function getApiKeyStatusData(string $api_key): ?array {
 		if ($api_key === '') {
-			return false;
+			return null;
 		}
 		$ch = curl_init();
 		if ($ch === false) {
-			return false;
+			return null;
 		}
 		$headers = [
 			'Authorization: Bearer ' . $api_key,
@@ -266,34 +298,39 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		$response = curl_exec($ch);
 		if ($response === false) {
 			curl_close($ch);
-			return false;
+			return null;
 		}
 		$httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
 		curl_close($ch);
+		if ($httpCode === 401 || $httpCode === 403) {
+			return ['ok' => false, 'seo_status' => false];
+		}
 		if ($httpCode < 200 || $httpCode >= 300) {
-			return false;
+			return null;
 		}
 		$data = json_decode($response, true);
-		return is_array($data) && !empty($data['ok']);
+		if (!is_array($data) || !isset($data['ok'])) {
+			return null;
+		}
+		return [
+			'ok' => !empty($data['ok']),
+			'seo_status' => isset($data['seo_status']) ? (bool)$data['seo_status'] : null
+		];
 	}
 
 	public function install(): void {
 		$this->load->model('user/user_group');
-		$routes = [
-			'extension/eleads/module/eleads',
-			'extension/eleads/module/eleads.save',
-			'extension/eleads/module/eleads.update',
-			'extension/eleads/module/eleads.apikey',
-		];
-		foreach ($routes as $route) {
-			$this->model_user_user_group->addPermission($this->user->getGroupId(), 'access', $route);
-			$this->model_user_user_group->addPermission($this->user->getGroupId(), 'modify', $route);
-		}
+		$this->model_user_user_group->addPermission($this->user->getGroupId(), 'access', 'extension/eleads/module/eleads');
+		$this->model_user_user_group->addPermission($this->user->getGroupId(), 'modify', 'extension/eleads/module/eleads');
+		// Backward compatibility if extension folder name differs in existing installs.
+		$this->model_user_user_group->addPermission($this->user->getGroupId(), 'access', 'extension/eleads-opencart-4.x/module/eleads');
+		$this->model_user_user_group->addPermission($this->user->getGroupId(), 'modify', 'extension/eleads-opencart-4.x/module/eleads');
 
 		$this->load->model('setting/event');
 		$this->model_setting_event->deleteEventByCode('eleads_product_add');
 		$this->model_setting_event->deleteEventByCode('eleads_product_edit');
 		$this->model_setting_event->deleteEventByCode('eleads_product_delete');
+		$this->model_setting_event->deleteEventByCode('eleads_seo_route');
 		$this->model_setting_event->addEvent([
 			'code' => 'eleads_product_add',
 			'description' => 'E-Leads product add',
@@ -318,25 +355,22 @@ class Eleads extends \Opencart\System\Engine\Controller {
 			'status' => true,
 			'sort_order' => 0
 		]);
+		$this->model_setting_event->addEvent([
+			'code' => 'eleads_seo_route',
+			'description' => 'E-Leads SEO routes',
+			'trigger' => 'catalog/controller/startup/seo_url/before',
+			'action' => 'extension/eleads/module/eleads.eventSeoUrl',
+			'status' => true,
+			'sort_order' => 0
+		]);
 	}
 
 	public function uninstall(): void {
-		$this->load->model('user/user_group');
-		$routes = [
-			'extension/eleads/module/eleads',
-			'extension/eleads/module/eleads.save',
-			'extension/eleads/module/eleads.update',
-			'extension/eleads/module/eleads.apikey',
-		];
-		foreach ($routes as $route) {
-			$this->model_user_user_group->removePermission($this->user->getGroupId(), 'access', $route);
-			$this->model_user_user_group->removePermission($this->user->getGroupId(), 'modify', $route);
-		}
-
 		$this->load->model('setting/event');
 		$this->model_setting_event->deleteEventByCode('eleads_product_add');
 		$this->model_setting_event->deleteEventByCode('eleads_product_edit');
 		$this->model_setting_event->deleteEventByCode('eleads_product_delete');
+		$this->model_setting_event->deleteEventByCode('eleads_seo_route');
 		$this->syncWidgetLoaderTag(false, '');
 	}
 
@@ -448,6 +482,7 @@ class Eleads extends \Opencart\System\Engine\Controller {
 			'module_eleads_picture_limit' => 5,
 			'module_eleads_image_size' => 'original',
 			'module_eleads_short_description_source' => 'meta_description',
+			'module_eleads_seo_pages_enabled' => 0,
 			'module_eleads_api_key' => '',
 		];
 
@@ -473,6 +508,101 @@ class Eleads extends \Opencart\System\Engine\Controller {
 			}
 		}
 		return $data;
+	}
+
+	private function syncSeoSitemap(bool $enabled, string $api_key, array $settings): void {
+		$path = $this->getSeoSitemapPath();
+		if ($enabled) {
+			$slugs = $this->fetchSeoSlugs($api_key);
+			$base_url = $this->getSeoBaseUrl($settings);
+			$dir = dirname($path);
+			if (!is_dir($dir)) {
+				@mkdir($dir, 0755, true);
+			}
+			$content = $this->buildSeoSitemapXml($base_url, $slugs);
+			@file_put_contents($path, $content);
+		} else {
+			if (is_file($path)) {
+				@unlink($path);
+			}
+		}
+	}
+
+	private function getSeoSitemapPath(): string {
+		$root = rtrim(dirname(DIR_CATALOG), '/\\');
+		return $root . '/e-search/sitemap.xml';
+	}
+
+	private function getSeoBaseUrl(array $settings): string {
+		$url = isset($settings['module_eleads_shop_url']) ? trim((string)$settings['module_eleads_shop_url']) : '';
+		if ($url !== '') {
+			return rtrim($url, '/');
+		}
+		if (defined('HTTPS_CATALOG') && HTTPS_CATALOG) {
+			return rtrim(HTTPS_CATALOG, '/');
+		}
+		if (defined('HTTP_CATALOG') && HTTP_CATALOG) {
+			return rtrim(HTTP_CATALOG, '/');
+		}
+		$ssl = (string)$this->config->get('config_ssl');
+		return $ssl !== '' ? rtrim($ssl, '/') : rtrim((string)$this->config->get('config_url'), '/');
+	}
+
+	private function fetchSeoSlugs(string $api_key): array {
+		$api_key = trim($api_key);
+		if ($api_key === '') {
+			return [];
+		}
+		require_once DIR_EXTENSION . 'eleads/system/library/eleads/api_routes.php';
+		$ch = curl_init();
+		if ($ch === false) {
+			return [];
+		}
+		$headers = [
+			'Authorization: Bearer ' . $api_key,
+			'Accept: application/json',
+		];
+		curl_setopt($ch, CURLOPT_URL, \EleadsApiRoutes::SEO_SLUGS);
+		curl_setopt($ch, CURLOPT_HTTPGET, true);
+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+		curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+		curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 4);
+		curl_setopt($ch, CURLOPT_TIMEOUT, 6);
+		$response = curl_exec($ch);
+		if ($response === false) {
+			curl_close($ch);
+			return [];
+		}
+		$httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+		curl_close($ch);
+		if ($httpCode < 200 || $httpCode >= 300) {
+			return [];
+		}
+		$data = json_decode($response, true);
+		if (!is_array($data) || empty($data['slugs']) || !is_array($data['slugs'])) {
+			return [];
+		}
+		return array_values(array_filter($data['slugs'], 'is_string'));
+	}
+
+	private function buildSeoSitemapXml(string $base_url, array $slugs): string {
+		$base_url = rtrim($base_url, '/');
+		$rows = [];
+		foreach ($slugs as $slug) {
+			$slug = trim((string)$slug);
+			if ($slug === '') {
+				continue;
+			}
+			$loc = $base_url . '/e-search/' . rawurlencode($slug);
+			$rows[] = '  <url><loc>' . htmlspecialchars($loc, ENT_QUOTES, 'UTF-8') . '</loc></url>';
+		}
+		$xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+		$xml .= "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n";
+		if ($rows) {
+			$xml .= implode("\n", $rows) . "\n";
+		}
+		$xml .= "</urlset>\n";
+		return $xml;
 	}
 
 	private function getCategoriesTreeNodes(int $parent_id = 0, int $level = 0, array &$visited = []): array {
