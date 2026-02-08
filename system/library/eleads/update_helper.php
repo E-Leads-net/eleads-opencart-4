@@ -110,7 +110,7 @@ class EleadsUpdateHelper {
 			return 'eleads-opencart-2.x.ocmod.zip';
 		}
 		if ($major === 4) {
-			return 'eleads-opencart-4.x.ocmod.zip';
+			return 'eleads.ocmod.zip';
 		}
 
 		return 'eleads-opencart-3.x.ocmod.zip';

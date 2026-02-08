@@ -1,10 +1,10 @@
 {
   "extension_id": "",
   "extension_download_id": "",
-  "name": "E-Leads Feed",
-  "description": "E-Leads Feed module for OpenCart 4",
+  "name": "E-Leads",
+  "description": "E-Leads module for OpenCart 4",
   "code": "eleads",
-  "version": "0.1.9",
+  "version": "0.1.20",
   "author": "E-Leads",
   "link": "https://github.com/E-Leads-net/eleads-opencart-4"
 }
