@@ -136,11 +136,12 @@ class EleadsOcAdapter {
 		if ($path === '') {
 			return '';
 		}
-		$base = $this->getDefaultShopUrl();
-		if ($base === '') {
-			return '';
+		$link = $this->buildCatalogLink('product/category', 'path=' . $path);
+		if ($link !== '') {
+			return $link;
 		}
-		return rtrim($base, '/') . '/index.php?route=product/category&path=' . $path;
+		$base = $this->getDefaultShopUrl();
+		return $base === '' ? '' : rtrim($base, '/') . '/index.php?route=product/category&path=' . $path;
 	}
 
 	public function getCategoryPathNames($category_id) {
@@ -409,11 +410,32 @@ class EleadsOcAdapter {
 	}
 
 	public function getProductUrl($product_id) {
+		$link = $this->buildCatalogLink('product/product', 'product_id=' . (int)$product_id);
+		if ($link !== '') {
+			return $link;
+		}
 		$base = $this->getDefaultShopUrl();
-		if ($base === '') {
+		return $base === '' ? '' : rtrim($base, '/') . '/index.php?route=product/product&product_id=' . (int)$product_id;
+	}
+
+	private function buildCatalogLink($route, $args = '') {
+		if (!$this->url) {
 			return '';
 		}
-		return rtrim($base, '/') . '/index.php?route=product/product&product_id=' . (int)$product_id;
+
+		$lang = (string)$this->config->get('config_language');
+		$query = trim((string)$args, '&');
+		if ($lang !== '' && strpos($query, 'language=') === false) {
+			$query = ($query !== '' ? $query . '&' : '') . 'language=' . rawurlencode($lang);
+		}
+
+		try {
+			$link = (string)$this->url->link((string)$route, $query);
+		} catch (\Throwable $e) {
+			return '';
+		}
+
+		return str_replace('&amp;', '&', $link);
 	}
 
 	public function getStockStatusName($stock_status_id) {

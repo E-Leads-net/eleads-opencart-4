@@ -25,7 +25,8 @@ jobs:
           cp -R admin "$stage/admin"
           cp -R catalog "$stage/catalog"
           cp -R system "$stage/system"
-          (cd "$stage" && zip -qr "$GITHUB_WORKSPACE/build/releases/eleads.ocmod.zip" install.json admin catalog system)
+          if [ -d extension ]; then cp -R extension "$stage/extension"; fi
+          (cd "$stage" && zip -qr "$GITHUB_WORKSPACE/build/releases/eleads.ocmod.zip" .)
           rm -rf "$stage"
 
       - name: Publish GitHub release

@@ -28,65 +28,6 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		$this->response->setOutput($result['xml']);
 	}
 
-	public function eventSeoUrl(string &$route, array &$args): void {
-		$path = '';
-		if (isset($this->request->get['_route_'])) {
-			$path = trim((string)$this->request->get['_route_'], '/');
-		} elseif (!empty($this->request->server['REQUEST_URI'])) {
-			$uri_path = parse_url((string)$this->request->server['REQUEST_URI'], PHP_URL_PATH);
-			$path = trim((string)$uri_path, '/');
-		}
-		if ($path === '') {
-			return;
-		}
-		if (strpos($path, 'index.php') === 0) {
-			return;
-		}
-		if (preg_match('#^eleads-yml/([a-zA-Z_-]+)\.xml$#', $path, $m)) {
-			$this->request->get['route'] = 'extension/eleads/module/eleads';
-			$this->request->get['lang'] = $m[1];
-			return;
-		}
-		if ($path === 'e-search/api/sitemap-sync') {
-			$this->request->get['route'] = 'extension/eleads/module/eleads.sitemapSync';
-			return;
-		}
-		if ($path === 'e-search/api/languages') {
-			$this->request->get['route'] = 'extension/eleads/module/eleads.languages';
-			return;
-		}
-		if (preg_match('#^([a-zA-Z0-9_-]+)/e-search/(.+)$#', $path, $m)) {
-			$lang = $m[1];
-			$tail = $m[2];
-			if ($tail !== '' && strpos($tail, 'api/') !== 0 && $tail !== 'sitemap.xml') {
-				$this->request->get['route'] = 'extension/eleads/module/eleads.seoPage';
-				$this->request->get['slug'] = $tail;
-				$this->request->get['lang'] = $lang;
-				return;
-			}
-		}
-		if (strpos($path, 'e-search/') === 0) {
-			$tail = substr($path, strlen('e-search/'));
-			if ($tail !== '' && strpos($tail, 'api/') !== 0 && $tail !== 'sitemap.xml') {
-				$lang = '';
-				$slug = $tail;
-				$parts = explode('/', $tail, 2);
-				if (count($parts) === 2) {
-					$lang = $parts[0];
-					$slug = $parts[1];
-				}
-
-				if ($slug !== '') {
-					$this->request->get['route'] = 'extension/eleads/module/eleads.seoPage';
-					$this->request->get['slug'] = $slug;
-					if ($lang !== '') {
-						$this->request->get['lang'] = $lang;
-					}
-				}
-			}
-		}
-	}
-
 	public function sitemapSync(): void {
 		if (($this->request->server['REQUEST_METHOD'] ?? '') !== 'POST') {
 			$this->response->addHeader('HTTP/1.1 405 Method Not Allowed');
@@ -271,6 +212,8 @@ class Eleads extends \Opencart\System\Engine\Controller {
 	public function seoPage(): void {
 		$slug = isset($this->request->get['slug']) ? trim((string)$this->request->get['slug']) : '';
 		$lang = isset($this->request->get['lang']) ? trim((string)$this->request->get['lang']) : '';
+		$request_uri = isset($this->request->server['REQUEST_URI']) ? (string)$this->request->server['REQUEST_URI'] : '';
+		$route_lang_provided = $lang !== '' && strpos($request_uri, '/e-search/') !== false;
 		$requested_store_code = isset($this->request->get['language']) ? (string)$this->request->get['language'] : (isset($this->session->data['language']) ? (string)$this->session->data['language'] : (string)$this->config->get('config_language'));
 		if ($slug === '') {
 			$this->response->addHeader('HTTP/1.1 404 Not Found');
@@ -299,7 +242,7 @@ class Eleads extends \Opencart\System\Engine\Controller {
 
 		$current_short = $this->resolveSeoSitemapLanguage($lang);
 		$selected_short = $this->resolveSeoSitemapLanguage($requested_store_code);
-		if ($selected_short !== '' && $current_short !== '' && $selected_short !== $current_short) {
+		if (!$route_lang_provided && $selected_short !== '' && $current_short !== '' && $selected_short !== $current_short) {
 			$alternate_url = $this->findAlternateUrl($page['alternate'], $selected_short);
 			if ($alternate_url !== '') {
 				$this->response->redirect($alternate_url);
@@ -787,11 +730,13 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		$this->session->data['language'] = $code;
 		$this->config->set('config_language', $code);
 		$this->config->set('config_language_id', (int)$languages[$code]['language_id']);
-
-		$language = new \Opencart\System\Library\Language($code);
-		$language->load($code);
-		$this->registry->set('language', $language);
-		$this->language = $language;
+		if (!empty($languages[$code]['extension'])) {
+			$this->language->addPath(
+				'extension/' . $languages[$code]['extension'],
+				DIR_EXTENSION . $languages[$code]['extension'] . '/catalog/language/'
+			);
+		}
+		$this->load->language('default', '', $code);
 	}
 
 	private function findAlternateUrl(array $alternates, string $target_short): string {

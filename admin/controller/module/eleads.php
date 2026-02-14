@@ -3,6 +3,8 @@ namespace Opencart\Admin\Controller\Extension\Eleads\Module;
 
 class Eleads extends \Opencart\System\Engine\Controller {
 	public function index(): void {
+		$this->ensureLegacyAdminLanguageBridge();
+		$this->ensureCoreSeoRoutePatch();
 		$this->load->language('extension/eleads/module/eleads');
 
 		$this->document->setTitle($this->language->get('heading_title'));
@@ -74,6 +76,7 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		$data['entry_api_key_hint'] = $this->language->get('entry_api_key_hint');
 
 		$this->load->model('setting/setting');
+		$this->load->model('setting/event');
 		$this->load->model('localisation/language');
 		$this->load->model('catalog/category');
 		$this->load->model('catalog/attribute');
@@ -132,8 +135,9 @@ class Eleads extends \Opencart\System\Engine\Controller {
 			$data['options'] = $options;
 			$data['feed_urls'] = $this->buildFeedUrls($data['languages'], $data['module_eleads_access_key']);
 
-			require_once DIR_EXTENSION . 'eleads/system/library/eleads/bootstrap.php';
-			$data['update_info'] = \EleadsUpdateHelper::getUpdateInfo();
+			require_once DIR_EXTENSION . 'eleads/system/library/eleads/update_manager.php';
+			$update_manager = new \EleadsUpdateManager($this->registry);
+			$data['update_info'] = $update_manager->getUpdateInfo();
 			$data['update_url'] = $this->url->link('extension/eleads/module/eleads.update', 'user_token=' . $this->session->data['user_token']);
 		} else {
 			$data['languages'] = [];
@@ -191,62 +195,17 @@ class Eleads extends \Opencart\System\Engine\Controller {
 
 	public function update(): void {
 		$this->load->language('extension/eleads/module/eleads');
-		require_once DIR_EXTENSION . 'eleads/system/library/eleads/bootstrap.php';
-
-		$root_path = rtrim(dirname(DIR_APPLICATION), '/\\') . '/';
-		$result = \EleadsUpdateHelper::updateToLatest($root_path);
+		require_once DIR_EXTENSION . 'eleads/system/library/eleads/update_manager.php';
+		$update_manager = new \EleadsUpdateManager($this->registry);
+		$result = $update_manager->updateToLatest();
 
 		if (!empty($result['ok'])) {
-			$this->refreshAfterUpdate();
 			$this->session->data['success'] = $this->language->get('text_update_success');
 		} else {
 			$this->session->data['error'] = isset($result['message']) ? $result['message'] : $this->language->get('text_update_error');
 		}
 
 		$this->response->redirect($this->url->link('extension/eleads/module/eleads', 'user_token=' . $this->session->data['user_token']));
-	}
-
-	private function refreshAfterUpdate(): void {
-		// Rebuild OCMOD cache
-		$this->load->controller('marketplace/modification.refresh');
-
-		// Clear template/data cache
-		$this->clearDirectoryFiles(DIR_CACHE);
-	}
-
-	private function clearDirectoryFiles(string $dir): void {
-		if (!is_dir($dir)) {
-			return;
-		}
-		$items = glob(rtrim($dir, '/\\') . '/*');
-		if (!$items) {
-			return;
-		}
-		foreach ($items as $item) {
-			$name = basename($item);
-			if ($name === 'index.html' || $name === '.htaccess') {
-				continue;
-			}
-			if (is_dir($item)) {
-				$this->removeDirectory($item);
-			} else {
-				@unlink($item);
-			}
-		}
-	}
-
-	private function removeDirectory(string $dir): void {
-		$items = glob(rtrim($dir, '/\\') . '/*');
-		if ($items) {
-			foreach ($items as $item) {
-				if (is_dir($item)) {
-					$this->removeDirectory($item);
-				} else {
-					@unlink($item);
-				}
-			}
-		}
-		@rmdir($dir);
 	}
 
 	public function apikey(): void {
@@ -321,18 +280,16 @@ class Eleads extends \Opencart\System\Engine\Controller {
 	}
 
 	public function install(): void {
-		$this->load->model('user/user_group');
-		$this->model_user_user_group->addPermission($this->user->getGroupId(), 'access', 'extension/eleads/module/eleads');
-		$this->model_user_user_group->addPermission($this->user->getGroupId(), 'modify', 'extension/eleads/module/eleads');
-		// Backward compatibility if extension folder name differs in existing installs.
-		$this->model_user_user_group->addPermission($this->user->getGroupId(), 'access', 'extension/eleads-opencart-4.x/module/eleads');
-		$this->model_user_user_group->addPermission($this->user->getGroupId(), 'modify', 'extension/eleads-opencart-4.x/module/eleads');
+		$this->ensureLegacyAdminLanguageBridge();
+		$this->ensureCoreSeoRoutePatch();
+		$this->grantModulePermissions();
 
 		$this->load->model('setting/event');
 		$this->model_setting_event->deleteEventByCode('eleads_product_add');
 		$this->model_setting_event->deleteEventByCode('eleads_product_edit');
 		$this->model_setting_event->deleteEventByCode('eleads_product_delete');
 		$this->model_setting_event->deleteEventByCode('eleads_seo_route');
+		$this->model_setting_event->deleteEventByCode('eleads_seo_route_index');
 		$this->model_setting_event->addEvent([
 			'code' => 'eleads_product_add',
 			'description' => 'E-Leads product add',
@@ -357,14 +314,117 @@ class Eleads extends \Opencart\System\Engine\Controller {
 			'status' => true,
 			'sort_order' => 0
 		]);
-		$this->model_setting_event->addEvent([
-			'code' => 'eleads_seo_route',
-			'description' => 'E-Leads SEO routes',
-			'trigger' => 'catalog/controller/startup/seo_url/before',
-			'action' => 'extension/eleads/module/eleads.eventSeoUrl',
-			'status' => true,
-			'sort_order' => 0
-		]);
+	}
+
+	private function ensureLegacyAdminLanguageBridge(): void {
+		$source_base = DIR_EXTENSION . 'eleads/admin/language/';
+		$target_base = DIR_APPLICATION . 'language/';
+
+		if (!is_dir($source_base) || !is_dir($target_base)) {
+			return;
+		}
+
+		$lang_dirs = scandir($source_base);
+		if (!is_array($lang_dirs)) {
+			return;
+		}
+
+		foreach ($lang_dirs as $lang_dir) {
+			if ($lang_dir === '.' || $lang_dir === '..') {
+				continue;
+			}
+
+			$source_file = $source_base . $lang_dir . '/extension/eleads/module/eleads.php';
+			if (!is_file($source_file)) {
+				$fallback = $source_base . $lang_dir . '/module/eleads.php';
+				if (is_file($fallback)) {
+					$source_file = $fallback;
+				} else {
+					continue;
+				}
+			}
+
+			$lang_variants = [
+				$lang_dir,
+				str_replace('_', '-', $lang_dir),
+				str_replace('-', '_', $lang_dir),
+				strtolower($lang_dir),
+				strtolower(str_replace('_', '-', $lang_dir)),
+				strtolower(str_replace('-', '_', $lang_dir))
+			];
+			$lang_variants = array_values(array_unique(array_filter($lang_variants)));
+
+			$destinations = [];
+			foreach ($lang_variants as $lang_variant) {
+				$destinations[] = $target_base . $lang_variant . '/extension/eleads/module/eleads.php';
+				$destinations[] = $target_base . $lang_variant . '/module/eleads.php';
+			}
+
+			foreach ($destinations as $destination_file) {
+				$destination_dir = dirname($destination_file);
+				if (!is_dir($destination_dir) && !mkdir($destination_dir, 0755, true) && !is_dir($destination_dir)) {
+					continue;
+				}
+				@copy($source_file, $destination_file);
+			}
+		}
+	}
+
+	private function ensureCoreSeoRoutePatch(): void {
+		if (!defined('DIR_CATALOG')) {
+			return;
+		}
+
+		$file = DIR_CATALOG . 'controller/startup/seo_url.php';
+
+		if (!is_file($file)) {
+			return;
+		}
+
+		$content = (string)file_get_contents($file);
+		if ($content === '') {
+			return;
+		}
+
+		if (strpos($content, '// ELeads SEO Routes Start') !== false) {
+			return;
+		}
+
+		$needle = "if (isset(\$this->request->get['_route_'])) {";
+		$insert = "\n\t\t\t\t// ELeads SEO Routes Start\n\t\t\t\t\$route = trim((string)\$this->request->get['_route_'], '/');\n\t\t\t\tif (preg_match('#^eleads-yml/([a-zA-Z_-]+)\\.xml$#', \$route, \$m)) {\n\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads';\n\t\t\t\t\t\$this->request->get['lang'] = \$m[1];\n\t\t\t\t\treturn null;\n\t\t\t\t}\n\t\t\t\tif (\$route === 'e-search/api/sitemap-sync') {\n\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads.sitemapSync';\n\t\t\t\t\treturn null;\n\t\t\t\t}\n\t\t\t\tif (\$route === 'e-search/api/languages') {\n\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads.languages';\n\t\t\t\t\treturn null;\n\t\t\t\t}\n\t\t\t\tif (preg_match('#^([a-zA-Z0-9_-]+)/e-search/(.+)$#', \$route, \$m)) {\n\t\t\t\t\t\$lang = \$m[1];\n\t\t\t\t\t\$tail = \$m[2];\n\t\t\t\t\tif (\$tail !== '' && strpos(\$tail, 'api/') !== 0 && \$tail !== 'sitemap.xml') {\n\t\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads.seoPage';\n\t\t\t\t\t\t\$this->request->get['slug'] = \$tail;\n\t\t\t\t\t\t\$this->request->get['lang'] = \$lang;\n\t\t\t\t\t\treturn null;\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\tif (strpos(\$route, 'e-search/') === 0) {\n\t\t\t\t\t\$tail = substr(\$route, strlen('e-search/'));\n\t\t\t\t\tif (\$tail !== '' && strpos(\$tail, 'api/') !== 0 && \$tail !== 'sitemap.xml') {\n\t\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads.seoPage';\n\t\t\t\t\t\t\$this->request->get['slug'] = \$tail;\n\t\t\t\t\t\treturn null;\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\t// ELeads SEO Routes End";
+
+		if (strpos($content, $needle) === false) {
+			return;
+		}
+
+		$backup = $file . '.eleads.bak';
+		if (!is_file($backup)) {
+			@file_put_contents($backup, $content);
+		}
+
+		$patched = str_replace($needle, $needle . $insert, $content);
+		@file_put_contents($file, $patched);
+	}
+
+	private function grantModulePermissions(): void {
+		$this->load->model('user/user_group');
+		$groups = (array)$this->model_user_user_group->getUserGroups();
+		$routes = [
+			'extension/eleads/module/eleads',
+			// Backward compatibility if extension folder name differs in existing installs.
+			'extension/eleads-opencart-4.x/module/eleads',
+		];
+
+		foreach ($groups as $group) {
+			$group_id = isset($group['user_group_id']) ? (int)$group['user_group_id'] : 0;
+			if ($group_id <= 0) {
+				continue;
+			}
+			foreach ($routes as $route) {
+				$this->model_user_user_group->addPermission($group_id, 'access', $route);
+				$this->model_user_user_group->addPermission($group_id, 'modify', $route);
+			}
+		}
 	}
 
 	public function uninstall(): void {
@@ -373,7 +433,37 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		$this->model_setting_event->deleteEventByCode('eleads_product_edit');
 		$this->model_setting_event->deleteEventByCode('eleads_product_delete');
 		$this->model_setting_event->deleteEventByCode('eleads_seo_route');
+		$this->model_setting_event->deleteEventByCode('eleads_seo_route_index');
+		$this->removeCoreSeoRoutePatch();
 		$this->syncWidgetLoaderTag(false, '');
+	}
+
+	private function removeCoreSeoRoutePatch(): void {
+		if (!defined('DIR_CATALOG')) {
+			return;
+		}
+
+		$file = DIR_CATALOG . 'controller/startup/seo_url.php';
+
+		if (!is_file($file)) {
+			return;
+		}
+
+		$content = (string)file_get_contents($file);
+		if ($content === '') {
+			return;
+		}
+
+		$pattern = '/\\n\\t\\t\\t\\t\\/\\/ ELeads SEO Routes Start.*?\\/\\/ ELeads SEO Routes End/s';
+		$cleaned = preg_replace($pattern, '', $content);
+
+		if (is_string($cleaned) && $cleaned !== $content) {
+			@file_put_contents($file, $cleaned);
+		}
+		$backup = $file . '.eleads.bak';
+		if (is_file($backup)) {
+			@unlink($backup);
+		}
 	}
 
 	public function eventProductAdd(string $route, array $args, mixed $output): void {
@@ -392,61 +482,9 @@ class Eleads extends \Opencart\System\Engine\Controller {
 	}
 
 	private function syncProduct(int $product_id, string $mode): void {
-		if ($product_id <= 0) {
-			return;
-		}
-
-		require_once DIR_EXTENSION . 'eleads/system/library/eleads/bootstrap.php';
-		require_once DIR_EXTENSION . 'eleads/system/library/eleads/oc_adapter.php';
-
-		$adapter = new \EleadsOcAdapter($this->registry);
-		$settings = $adapter->getSettings();
-		$payload_builder = new \EleadsSyncPayloadBuilder();
-		$api_client = new \EleadsApiClient();
-		$service = new \EleadsSyncService($settings, $adapter, $payload_builder, $api_client);
-		$languages = ($mode === 'delete') ? $this->getEnabledSyncLanguages() : $this->getProductSyncLanguages($product_id);
-		if (empty($languages)) {
-			return;
-		}
-
-		foreach ($languages as $lang_code) {
-			if ($mode === 'create') {
-				$service->syncProductCreated($product_id, $lang_code);
-			} elseif ($mode === 'delete') {
-				$service->syncProductDeleted($product_id, $lang_code);
-			} else {
-				$service->syncProductUpdated($product_id, $lang_code);
-			}
-		}
-	}
-
-	private function getProductSyncLanguages(int $product_id): array {
-		$languages = [];
-		$query = $this->db->query(
-			"SELECT DISTINCT l.code FROM `" . DB_PREFIX . "product_description` pd LEFT JOIN `" . DB_PREFIX . "language` l ON (pd.language_id = l.language_id) WHERE pd.product_id = '" . (int)$product_id . "' AND l.status = '1'"
-		);
-		foreach ((array)$query->rows as $row) {
-			$normalized = $this->normalizeFeedLang(isset($row['code']) ? (string)$row['code'] : '');
-			if ($normalized !== '') {
-				$languages[$normalized] = $normalized;
-			}
-		}
-		if (!empty($languages)) {
-			return array_values($languages);
-		}
-		return $this->getEnabledSyncLanguages();
-	}
-
-	private function getEnabledSyncLanguages(): array {
-		$languages = [];
-		$query = $this->db->query("SELECT `code` FROM `" . DB_PREFIX . "language` WHERE `status` = '1'");
-		foreach ((array)$query->rows as $row) {
-			$normalized = $this->normalizeFeedLang(isset($row['code']) ? (string)$row['code'] : '');
-			if ($normalized !== '') {
-				$languages[$normalized] = $normalized;
-			}
-		}
-		return array_values($languages);
+		require_once DIR_EXTENSION . 'eleads/system/library/eleads/sync_manager.php';
+		$manager = new \EleadsSyncManager($this->registry);
+		$manager->syncProduct((int)$product_id, (string)$mode);
 	}
 
 	private function normalizeFeedLang(string $lang): string {
@@ -527,160 +565,9 @@ class Eleads extends \Opencart\System\Engine\Controller {
 	}
 
 	private function syncSeoSitemap(bool $enabled, string $api_key, array $settings): void {
-		$path = $this->getSeoSitemapPath();
-		if ($enabled) {
-			$slugs = $this->fetchSeoSlugs($api_key);
-			$base_url = $this->getSeoBaseUrl($settings);
-			$dir = dirname($path);
-			if (!is_dir($dir)) {
-				@mkdir($dir, 0755, true);
-			}
-			$content = $this->buildSeoSitemapXml($base_url, $slugs);
-			@file_put_contents($path, $content);
-		} else {
-			if (is_file($path)) {
-				@unlink($path);
-			}
-		}
-	}
-
-	private function getSeoSitemapPath(): string {
-		$root = rtrim(dirname(DIR_CATALOG), '/\\');
-		return $root . '/e-search/sitemap.xml';
-	}
-
-	private function getSeoBaseUrl(array $settings): string {
-		$url = isset($settings['module_eleads_shop_url']) ? trim((string)$settings['module_eleads_shop_url']) : '';
-		if ($url !== '') {
-			return rtrim($url, '/');
-		}
-		if (defined('HTTPS_CATALOG') && HTTPS_CATALOG) {
-			return rtrim(HTTPS_CATALOG, '/');
-		}
-		if (defined('HTTP_CATALOG') && HTTP_CATALOG) {
-			return rtrim(HTTP_CATALOG, '/');
-		}
-		$ssl = (string)$this->config->get('config_ssl');
-		return $ssl !== '' ? rtrim($ssl, '/') : rtrim((string)$this->config->get('config_url'), '/');
-	}
-
-	private function fetchSeoSlugs(string $api_key): array {
-		$api_key = trim($api_key);
-		if ($api_key === '') {
-			return [];
-		}
-		require_once DIR_EXTENSION . 'eleads/system/library/eleads/api_routes.php';
-		$ch = curl_init();
-		if ($ch === false) {
-			return [];
-		}
-		$headers = [
-			'Authorization: Bearer ' . $api_key,
-			'Accept: application/json',
-		];
-		curl_setopt($ch, CURLOPT_URL, \EleadsApiRoutes::SEO_SLUGS);
-		curl_setopt($ch, CURLOPT_HTTPGET, true);
-		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-		curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-		curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 4);
-		curl_setopt($ch, CURLOPT_TIMEOUT, 6);
-		$response = curl_exec($ch);
-		if ($response === false) {
-			curl_close($ch);
-			return [];
-		}
-		$httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-		curl_close($ch);
-		if ($httpCode < 200 || $httpCode >= 300) {
-			return [];
-		}
-		$data = json_decode($response, true);
-		if (!is_array($data) || empty($data['slugs']) || !is_array($data['slugs'])) {
-			return [];
-		}
-
-		$items = [];
-		foreach ($data['slugs'] as $row) {
-			if (is_string($row)) {
-				$slug = trim($row);
-				if ($slug !== '') {
-					$items[] = ['slug' => $slug, 'lang' => ''];
-				}
-				continue;
-			}
-			if (!is_array($row)) {
-				continue;
-			}
-			$slug = isset($row['slug']) ? trim((string)$row['slug']) : '';
-			$lang = isset($row['lang']) ? trim((string)$row['lang']) : '';
-			if ($slug === '') {
-				continue;
-			}
-			$items[] = ['slug' => $slug, 'lang' => $this->normalizeFeedLang($lang)];
-		}
-
-		return $items;
-	}
-
-	private function buildSeoSitemapXml(string $base_url, array $slugs): string {
-		$base_url = rtrim($base_url, '/');
-		$lang_map = $this->getSeoUrlLangMap();
-		$rows = [];
-		foreach ($slugs as $item) {
-			$slug = '';
-			$api_lang = '';
-			if (is_array($item)) {
-				$slug = trim(isset($item['slug']) ? (string)$item['slug'] : '');
-				$api_lang = $this->normalizeFeedLang(isset($item['lang']) ? (string)$item['lang'] : '');
-			} else {
-				$slug = trim((string)$item);
-			}
-			if ($slug === '') {
-				continue;
-			}
-			if ($api_lang === '') {
-				$api_lang = $this->normalizeFeedLang((string)$this->config->get('config_language'));
-			}
-			$url_lang = $lang_map[$api_lang] ?? $api_lang;
-			$loc = $base_url . '/' . rawurlencode($url_lang) . '/e-search/' . rawurlencode($slug);
-			$rows[] = '  <url><loc>' . htmlspecialchars($loc, ENT_QUOTES, 'UTF-8') . '</loc></url>';
-		}
-		$xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
-		$xml .= "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n";
-		if ($rows) {
-			$xml .= implode("\n", $rows) . "\n";
-		}
-		$xml .= "</urlset>\n";
-		return $xml;
-	}
-
-	private function getSeoUrlLangMap(): array {
-		$this->load->model('localisation/language');
-		$map = [];
-
-		foreach ((array)$this->model_localisation_language->getLanguages() as $language) {
-			if (isset($language['status']) && !$language['status']) {
-				continue;
-			}
-			$code = strtolower(isset($language['code']) ? (string)$language['code'] : '');
-			$normalized = $this->normalizeFeedLang($code);
-			if ($normalized === '') {
-				continue;
-			}
-			$url_lang = $normalized;
-			if ($url_lang === 'uk') {
-				$url_lang = 'ua';
-			}
-			if (!isset($map[$normalized])) {
-				$map[$normalized] = $url_lang;
-			}
-		}
-
-		if (!isset($map['uk'])) {
-			$map['uk'] = 'ua';
-		}
-
-		return $map;
+		require_once DIR_EXTENSION . 'eleads/system/library/eleads/seo_sitemap_manager.php';
+		$manager = new \EleadsSeoSitemapManager($this->registry);
+		$manager->sync($enabled, $api_key, $settings);
 	}
 
 	private function getCategoriesTreeNodes(int $parent_id = 0, int $level = 0, array &$visited = []): array {
@@ -768,110 +655,9 @@ class Eleads extends \Opencart\System\Engine\Controller {
 	}
 
 	private function syncWidgetLoaderTag(bool $enabled, string $api_key): void {
-		$files = $this->getFooterTemplateFiles();
-		if (!$files) {
-			return;
-		}
-
-		$block = '';
-		if ($enabled) {
-			$tag = $this->fetchWidgetLoaderTag($api_key);
-			if ($tag !== '') {
-				$block = "<!-- ELeads Widgets Loader Tag Start -->\n" . $this->stripWidgetLoaderMarkers($tag) . "\n<!-- ELeads Widgets Loader Tag End -->";
-			}
-		}
-
-		foreach ($files as $file) {
-			$content = @file_get_contents($file);
-			if ($content === false) {
-				continue;
-			}
-			$updated = $this->removeWidgetLoaderBlock($content);
-			if ($enabled && $block !== '') {
-				if (preg_match('/<\/body>/i', $updated)) {
-					$updated = (string)preg_replace('/<\/body>/i', "\n" . $block . "\n</body>", $updated, 1);
-				} else {
-					$updated = rtrim($updated) . "\n\n" . $block . "\n";
-				}
-			}
-			if ($updated !== $content) {
-				@file_put_contents($file, $updated);
-			}
-		}
-	}
-
-	private function fetchWidgetLoaderTag(string $api_key): string {
-		$api_key = trim($api_key);
-		if ($api_key === '') {
-			return '';
-		}
-
-		require_once DIR_EXTENSION . 'eleads/system/library/eleads/api_routes.php';
-
-		$ch = curl_init();
-		if ($ch === false) {
-			return '';
-		}
-		curl_setopt($ch, CURLOPT_URL, \EleadsApiRoutes::WIDGETS_LOADER_TAG);
-		curl_setopt($ch, CURLOPT_HTTPGET, true);
-		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-		curl_setopt($ch, CURLOPT_HTTPHEADER, [
-			'Authorization: Bearer ' . $api_key,
-			'Accept: application/json, text/plain',
-		]);
-		curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 4);
-		curl_setopt($ch, CURLOPT_TIMEOUT, 8);
-		$response = curl_exec($ch);
-		$http_code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-		curl_close($ch);
-
-		if ($response === false || $http_code < 200 || $http_code >= 300) {
-			return '';
-		}
-
-		$body = trim((string)$response);
-		$json = json_decode($body, true);
-		if (is_array($json)) {
-			if (!empty($json['tag'])) {
-				return (string)$json['tag'];
-			}
-			if (!empty($json['data']['tag'])) {
-				return (string)$json['data']['tag'];
-			}
-			if (!empty($json['html'])) {
-				return (string)$json['html'];
-			}
-		}
-
-		return $body;
-	}
-
-	private function getFooterTemplateFiles(): array {
-		$root = rtrim(dirname(DIR_APPLICATION), '/\\') . '/';
-		$theme = (string)$this->config->get('config_theme');
-		$candidates = [
-			$root . 'extension/' . $theme . '/catalog/view/template/common/footer.twig',
-			$root . 'catalog/view/template/common/footer.twig',
-			$root . 'catalog/view/template/common/footer.tpl',
-		];
-
-		$files = [];
-		foreach ($candidates as $file) {
-			if (is_file($file)) {
-				$files[] = $file;
-			}
-		}
-		return array_values(array_unique($files));
-	}
-
-	private function removeWidgetLoaderBlock(string $content): string {
-		return (string)preg_replace('/\\s*<!--\\s*ELeads Widgets Loader Tag Start\\s*-->.*?<!--\\s*ELeads Widgets Loader Tag End\\s*-->\\s*/is', "\n", $content);
-	}
-
-	private function stripWidgetLoaderMarkers(string $content): string {
-		$content = (string)preg_replace('/<!--\\s*ELeads Widgets Loader Tag Start\\s*-->/i', '', $content);
-		$content = (string)preg_replace('/<!--\\s*ELeads Widgets Loader Tag End\\s*-->/i', '', $content);
-		return trim($content);
+		require_once DIR_EXTENSION . 'eleads/system/library/eleads/widget_tag_manager.php';
+		$manager = new \EleadsWidgetTagManager($this->registry);
+		$manager->sync($enabled, $api_key);
 	}
 
 	private function mapFeedLangCode(string $code, string $name): string {

@@ -1,7 +1,6 @@
 <?php
 // Heading
 $_['heading_title'] = 'E-Leads';
-$_['eleads_heading_title'] = 'E-Leads';
 
 // Text
 $_['text_extension'] = 'Extensions';
