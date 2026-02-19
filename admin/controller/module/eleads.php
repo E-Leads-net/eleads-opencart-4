@@ -375,35 +375,34 @@ class Eleads extends \Opencart\System\Engine\Controller {
 			return;
 		}
 
-		$file = DIR_CATALOG . 'controller/startup/seo_url.php';
-
-		if (!is_file($file)) {
-			return;
-		}
-
-		$content = (string)file_get_contents($file);
-		if ($content === '') {
-			return;
-		}
-
-		if (strpos($content, '// ELeads SEO Routes Start') !== false) {
-			return;
-		}
-
 		$needle = "if (isset(\$this->request->get['_route_'])) {";
 		$insert = "\n\t\t\t\t// ELeads SEO Routes Start\n\t\t\t\t\$route = trim((string)\$this->request->get['_route_'], '/');\n\t\t\t\tif (preg_match('#^eleads-yml/([a-zA-Z_-]+)\\.xml$#', \$route, \$m)) {\n\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads';\n\t\t\t\t\t\$this->request->get['lang'] = \$m[1];\n\t\t\t\t\treturn null;\n\t\t\t\t}\n\t\t\t\tif (\$route === 'e-search/api/sitemap-sync') {\n\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads.sitemapSync';\n\t\t\t\t\treturn null;\n\t\t\t\t}\n\t\t\t\tif (\$route === 'e-search/api/languages') {\n\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads.languages';\n\t\t\t\t\treturn null;\n\t\t\t\t}\n\t\t\t\tif (preg_match('#^([a-zA-Z0-9_-]+)/e-search/(.+)$#', \$route, \$m)) {\n\t\t\t\t\t\$lang = \$m[1];\n\t\t\t\t\t\$tail = \$m[2];\n\t\t\t\t\tif (\$tail !== '' && strpos(\$tail, 'api/') !== 0 && \$tail !== 'sitemap.xml') {\n\t\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads.seoPage';\n\t\t\t\t\t\t\$this->request->get['slug'] = \$tail;\n\t\t\t\t\t\t\$this->request->get['lang'] = \$lang;\n\t\t\t\t\t\treturn null;\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\tif (strpos(\$route, 'e-search/') === 0) {\n\t\t\t\t\t\$tail = substr(\$route, strlen('e-search/'));\n\t\t\t\t\tif (\$tail !== '' && strpos(\$tail, 'api/') !== 0 && \$tail !== 'sitemap.xml') {\n\t\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads.seoPage';\n\t\t\t\t\t\t\$this->request->get['slug'] = \$tail;\n\t\t\t\t\t\treturn null;\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\t// ELeads SEO Routes End";
+		foreach ($this->getSeoStartupControllerFiles() as $file) {
+			if (!is_file($file)) {
+				continue;
+			}
 
-		if (strpos($content, $needle) === false) {
-			return;
+			$content = (string)file_get_contents($file);
+			if ($content === '') {
+				continue;
+			}
+
+			if (strpos($content, '// ELeads SEO Routes Start') !== false) {
+				continue;
+			}
+
+			if (strpos($content, $needle) === false) {
+				continue;
+			}
+
+			$backup = $file . '.eleads.bak';
+			if (!is_file($backup)) {
+				@file_put_contents($backup, $content);
+			}
+
+			$patched = str_replace($needle, $needle . $insert, $content);
+			@file_put_contents($file, $patched);
 		}
-
-		$backup = $file . '.eleads.bak';
-		if (!is_file($backup)) {
-			@file_put_contents($backup, $content);
-		}
-
-		$patched = str_replace($needle, $needle . $insert, $content);
-		@file_put_contents($file, $patched);
 	}
 
 	private function grantModulePermissions(): void {
@@ -442,28 +441,34 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		if (!defined('DIR_CATALOG')) {
 			return;
 		}
-
-		$file = DIR_CATALOG . 'controller/startup/seo_url.php';
-
-		if (!is_file($file)) {
-			return;
-		}
-
-		$content = (string)file_get_contents($file);
-		if ($content === '') {
-			return;
-		}
-
 		$pattern = '/\\n\\t\\t\\t\\t\\/\\/ ELeads SEO Routes Start.*?\\/\\/ ELeads SEO Routes End/s';
-		$cleaned = preg_replace($pattern, '', $content);
+		foreach ($this->getSeoStartupControllerFiles() as $file) {
+			if (!is_file($file)) {
+				continue;
+			}
 
-		if (is_string($cleaned) && $cleaned !== $content) {
-			@file_put_contents($file, $cleaned);
+			$content = (string)file_get_contents($file);
+			if ($content === '') {
+				continue;
+			}
+
+			$cleaned = preg_replace($pattern, '', $content);
+
+			if (is_string($cleaned) && $cleaned !== $content) {
+				@file_put_contents($file, $cleaned);
+			}
+			$backup = $file . '.eleads.bak';
+			if (is_file($backup)) {
+				@unlink($backup);
+			}
 		}
-		$backup = $file . '.eleads.bak';
-		if (is_file($backup)) {
-			@unlink($backup);
-		}
+	}
+
+	private function getSeoStartupControllerFiles(): array {
+		return array(
+			DIR_CATALOG . 'controller/startup/seo_url.php',
+			DIR_CATALOG . 'controller/startup/seo_pro.php',
+		);
 	}
 
 	public function eventProductAdd(string $route, array $args, mixed $output): void {
