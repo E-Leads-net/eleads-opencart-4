@@ -209,6 +209,56 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		]));
 	}
 
+	public function feeds(): void {
+		if (($this->request->server['REQUEST_METHOD'] ?? '') !== 'GET') {
+			$this->response->addHeader('HTTP/1.1 405 Method Not Allowed');
+			$this->response->addHeader('Content-Type: application/json');
+			$this->response->setOutput(json_encode(['error' => 'method_not_allowed']));
+			return;
+		}
+
+		$api_key = (string)$this->config->get('module_eleads_api_key');
+		if ($api_key === '') {
+			$this->response->addHeader('HTTP/1.1 401 Unauthorized');
+			$this->response->addHeader('Content-Type: application/json');
+			$this->response->setOutput(json_encode(['error' => 'api_key_missing']));
+			return;
+		}
+
+		$auth = $this->getBearerToken();
+		if ($auth === '' || !hash_equals($api_key, $auth)) {
+			$this->response->addHeader('HTTP/1.1 401 Unauthorized');
+			$this->response->addHeader('Content-Type: application/json');
+			$this->response->setOutput(json_encode(['error' => 'unauthorized']));
+			return;
+		}
+
+		$access_key = trim((string)$this->config->get('module_eleads_access_key'));
+		$this->load->model('localisation/language');
+		$items = [];
+		foreach ((array)$this->model_localisation_language->getLanguages() as $language) {
+			if (isset($language['status']) && !$language['status']) {
+				continue;
+			}
+			$code = isset($language['code']) ? (string)$language['code'] : '';
+			$label = $this->resolveSeoSitemapLanguage($code);
+			$feed_lang = $this->normalizeFeedLang($code);
+			if ($label === '' || $feed_lang === '') {
+				continue;
+			}
+			if (!isset($items[$label])) {
+				$items[$label] = $this->buildFeedUrl($feed_lang, $access_key);
+			}
+		}
+
+		$this->response->addHeader('Content-Type: application/json');
+		$this->response->setOutput(json_encode([
+			'status' => 'ok',
+			'count' => count($items),
+			'items' => (object)$items,
+		]));
+	}
+
 	public function seoPage(): void {
 		$slug = isset($this->request->get['slug']) ? trim((string)$this->request->get['slug']) : '';
 		$lang = isset($this->request->get['lang']) ? trim((string)$this->request->get['lang']) : '';
@@ -757,5 +807,13 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		$base = $this->getSeoBaseUrl();
 		$lang = $this->resolveSeoSitemapLanguage($lang);
 		return $base . '/' . rawurlencode($lang) . '/e-search/' . rawurlencode($slug);
+	}
+
+	private function buildFeedUrl(string $feed_lang, string $access_key): string {
+		$url = $this->getSeoBaseUrl() . '/eleads-yml/' . rawurlencode($feed_lang) . '.xml';
+		if ($access_key !== '') {
+			$url .= '?key=' . rawurlencode($access_key);
+		}
+		return $url;
 	}
 }

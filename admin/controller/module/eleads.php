@@ -376,7 +376,7 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		}
 
 		$needle = "if (isset(\$this->request->get['_route_'])) {";
-		$insert = "\n\t\t\t\t// ELeads SEO Routes Start\n\t\t\t\t\$route = trim((string)\$this->request->get['_route_'], '/');\n\t\t\t\tif (preg_match('#^eleads-yml/([a-zA-Z_-]+)\\.xml$#', \$route, \$m)) {\n\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads';\n\t\t\t\t\t\$this->request->get['lang'] = \$m[1];\n\t\t\t\t\treturn null;\n\t\t\t\t}\n\t\t\t\tif (\$route === 'e-search/api/sitemap-sync') {\n\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads.sitemapSync';\n\t\t\t\t\treturn null;\n\t\t\t\t}\n\t\t\t\tif (\$route === 'e-search/api/languages') {\n\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads.languages';\n\t\t\t\t\treturn null;\n\t\t\t\t}\n\t\t\t\tif (preg_match('#^([a-zA-Z0-9_-]+)/e-search/(.+)$#', \$route, \$m)) {\n\t\t\t\t\t\$lang = \$m[1];\n\t\t\t\t\t\$tail = \$m[2];\n\t\t\t\t\tif (\$tail !== '' && strpos(\$tail, 'api/') !== 0 && \$tail !== 'sitemap.xml') {\n\t\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads.seoPage';\n\t\t\t\t\t\t\$this->request->get['slug'] = \$tail;\n\t\t\t\t\t\t\$this->request->get['lang'] = \$lang;\n\t\t\t\t\t\treturn null;\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\tif (strpos(\$route, 'e-search/') === 0) {\n\t\t\t\t\t\$tail = substr(\$route, strlen('e-search/'));\n\t\t\t\t\tif (\$tail !== '' && strpos(\$tail, 'api/') !== 0 && \$tail !== 'sitemap.xml') {\n\t\t\t\t\t\t\$this->request->get['route'] = 'extension/eleads/module/eleads.seoPage';\n\t\t\t\t\t\t\$this->request->get['slug'] = \$tail;\n\t\t\t\t\t\treturn null;\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\t// ELeads SEO Routes End";
+		$insert = $this->getSeoRoutesPatchInsert();
 		foreach ($this->getSeoStartupControllerFiles() as $file) {
 			if (!is_file($file)) {
 				continue;
@@ -469,6 +469,50 @@ class Eleads extends \Opencart\System\Engine\Controller {
 			DIR_CATALOG . 'controller/startup/seo_url.php',
 			DIR_CATALOG . 'controller/startup/seo_pro.php',
 		);
+	}
+
+	private function getSeoRoutesPatchInsert(): string {
+		return <<<'PATCH'
+
+				// ELeads SEO Routes Start
+				$route = trim((string)$this->request->get['_route_'], '/');
+				if (preg_match('#^eleads-yml/([a-zA-Z_-]+)\.xml$#', $route, $m)) {
+					$this->request->get['route'] = 'extension/eleads/module/eleads';
+					$this->request->get['lang'] = $m[1];
+					return null;
+				}
+				if ($route === 'eleads-yml/api/feeds') {
+					$this->request->get['route'] = 'extension/eleads/module/eleads.feeds';
+					return null;
+				}
+				if ($route === 'e-search/api/sitemap-sync') {
+					$this->request->get['route'] = 'extension/eleads/module/eleads.sitemapSync';
+					return null;
+				}
+				if ($route === 'e-search/api/languages') {
+					$this->request->get['route'] = 'extension/eleads/module/eleads.languages';
+					return null;
+				}
+				if (preg_match('#^([a-zA-Z0-9_-]+)/e-search/(.+)$#', $route, $m)) {
+					$lang = $m[1];
+					$tail = $m[2];
+					if ($tail !== '' && strpos($tail, 'api/') !== 0 && $tail !== 'sitemap.xml') {
+						$this->request->get['route'] = 'extension/eleads/module/eleads.seoPage';
+						$this->request->get['slug'] = $tail;
+						$this->request->get['lang'] = $lang;
+						return null;
+					}
+				}
+				if (strpos($route, 'e-search/') === 0) {
+					$tail = substr($route, strlen('e-search/'));
+					if ($tail !== '' && strpos($tail, 'api/') !== 0 && $tail !== 'sitemap.xml') {
+						$this->request->get['route'] = 'extension/eleads/module/eleads.seoPage';
+						$this->request->get['slug'] = $tail;
+						return null;
+					}
+				}
+				// ELeads SEO Routes End
+PATCH;
 	}
 
 	public function eventProductAdd(string $route, array $args, mixed $output): void {
