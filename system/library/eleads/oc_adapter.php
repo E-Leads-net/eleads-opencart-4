@@ -193,6 +193,7 @@ class EleadsOcAdapter {
 			$result[] = array(
 				'product_id' => (int)$product['product_id'],
 				'name' => $product['name'],
+				'model' => isset($product['model']) ? $product['model'] : '',
 				'description' => $product['description'],
 				'meta_description' => $product['meta_description'],
 				'manufacturer_id' => (int)$product['manufacturer_id'],
@@ -212,6 +213,7 @@ class EleadsOcAdapter {
 		return array(
 			'product_id' => (int)$product['product_id'],
 			'name' => $product['name'],
+			'model' => isset($product['model']) ? $product['model'] : '',
 			'description' => $product['description'],
 			'meta_description' => $product['meta_description'],
 			'manufacturer_id' => (int)$product['manufacturer_id'],
