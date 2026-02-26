@@ -167,8 +167,9 @@ class Eleads extends \Opencart\System\Engine\Controller {
 
 		if (!$json) {
 			require_once DIR_EXTENSION . 'eleads/system/library/eleads/api_routes.php';
-			$api_key = trim((string)$this->config->get('module_eleads_api_key'));
-			if ($api_key === '' || !$this->checkApiKeyStatus($api_key)) {
+			$api_key = trim((string)($this->request->post['module_eleads_api_key'] ?? $this->config->get('module_eleads_api_key')));
+			$status = $this->getApiKeyStatusData($api_key);
+			if ($api_key === '' || empty($status['ok'])) {
 				$json['error']['warning'] = $this->language->get('text_api_key_required');
 			}
 		}
@@ -177,14 +178,19 @@ class Eleads extends \Opencart\System\Engine\Controller {
 			$this->load->model('setting/setting');
 			$settings_current = $this->model_setting_setting->getSetting('module_eleads');
 			$seo_prev = !empty($settings_current['module_eleads_seo_pages_enabled']);
-			$this->model_setting_setting->editSetting('module_eleads', $this->request->post);
+			$settings_new = array_merge($settings_current, $this->request->post);
+			$settings_new['module_eleads_api_key'] = $api_key;
+			if (isset($status['project_id'])) {
+				$settings_new['module_eleads_project_id'] = (int)$status['project_id'];
+			}
+			$this->model_setting_setting->editSetting('module_eleads', $settings_new);
 			$this->syncWidgetLoaderTag(
-				!empty($this->request->post['module_eleads_status']),
-				(string)($this->request->post['module_eleads_api_key'] ?? $api_key)
+				!empty($settings_new['module_eleads_status']),
+				$api_key
 			);
-			$seo_new = !empty($this->request->post['module_eleads_seo_pages_enabled']);
+			$seo_new = !empty($settings_new['module_eleads_seo_pages_enabled']);
 			if ($seo_prev !== $seo_new || $seo_new) {
-				$this->syncSeoSitemap($seo_new, (string)$api_key, $this->request->post);
+				$this->syncSeoSitemap($seo_new, $api_key, $settings_new);
 			}
 			$json['success'] = $this->language->get('text_success');
 		}
@@ -221,9 +227,13 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		$api_key = trim((string)($this->request->post['module_eleads_api_key'] ?? ''));
 		$this->load->model('setting/setting');
 
-		if ($api_key !== '' && $this->checkApiKeyStatus($api_key)) {
+		$status = $this->getApiKeyStatusData($api_key);
+		if ($api_key !== '' && !empty($status['ok'])) {
 			$settings = $this->model_setting_setting->getSetting('module_eleads');
 			$settings['module_eleads_api_key'] = $api_key;
+			if (isset($status['project_id'])) {
+				$settings['module_eleads_project_id'] = (int)$status['project_id'];
+			}
 			$this->model_setting_setting->editSetting('module_eleads', $settings);
 			$this->session->data['success'] = $this->language->get('text_api_key_saved');
 		} else {
@@ -275,7 +285,8 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		}
 		return [
 			'ok' => !empty($data['ok']),
-			'seo_status' => isset($data['seo_status']) ? (bool)$data['seo_status'] : null
+			'seo_status' => isset($data['seo_status']) ? (bool)$data['seo_status'] : null,
+			'project_id' => isset($data['project_id']) ? (int)$data['project_id'] : null
 		];
 	}
 
@@ -491,6 +502,15 @@ class Eleads extends \Opencart\System\Engine\Controller {
 				}
 				if ($route === 'e-search/api/languages') {
 					$this->request->get['route'] = 'extension/eleads/module/eleads.languages';
+					return null;
+				}
+				if (preg_match('#^([a-zA-Z0-9_-]+)/e-filter/?$#', $route, $m)) {
+					$this->request->get['route'] = 'extension/eleads/module/eleads.filterPage';
+					$this->request->get['lang'] = $m[1];
+					return null;
+				}
+				if ($route === 'e-filter') {
+					$this->request->get['route'] = 'extension/eleads/module/eleads.filterPage';
 					return null;
 				}
 				if (preg_match('#^([a-zA-Z0-9_-]+)/e-search/(.+)$#', $route, $m)) {
