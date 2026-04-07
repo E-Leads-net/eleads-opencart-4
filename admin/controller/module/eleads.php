@@ -74,6 +74,12 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		$data['text_api_key_invalid'] = $this->language->get('text_api_key_invalid');
 		$data['entry_api_key_title'] = $this->language->get('entry_api_key_title');
 		$data['entry_api_key_hint'] = $this->language->get('entry_api_key_hint');
+		$data['button_generate'] = $this->language->get('button_generate');
+		$data['text_feed_idle'] = $this->language->get('text_feed_idle');
+		$data['text_feed_running'] = $this->language->get('text_feed_running');
+		$data['text_feed_ready'] = $this->language->get('text_feed_ready');
+		$data['text_feed_failed'] = $this->language->get('text_feed_failed');
+		$data['text_feed_accepted'] = $this->language->get('text_feed_accepted');
 
 		$this->load->model('setting/setting');
 		$this->load->model('setting/event');
@@ -120,6 +126,7 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		$data['api_key_value'] = $api_key;
 		$data['api_key_error'] = $api_key_error;
 		$data['api_key_action'] = $this->url->link('extension/eleads/module/eleads.apikey', 'user_token=' . $this->session->data['user_token']);
+		$data['eleads_api_key_js'] = $api_key;
 
 		if ($api_key_valid) {
 			$data['languages'] = $this->model_localisation_language->getLanguages();
@@ -492,6 +499,14 @@ class Eleads extends \Opencart\System\Engine\Controller {
 					$this->request->get['lang'] = $m[1];
 					return null;
 				}
+				if ($route === 'eleads-yml/api/generate') {
+					$this->request->get['route'] = 'extension/eleads/module/eleads.generateFeed';
+					return null;
+				}
+				if ($route === 'eleads-yml/api/status') {
+					$this->request->get['route'] = 'extension/eleads/module/eleads.feedStatus';
+					return null;
+				}
 				if ($route === 'eleads-yml/api/feeds') {
 					$this->request->get['route'] = 'extension/eleads/module/eleads.feeds';
 					return null;
@@ -703,6 +718,8 @@ PATCH;
 				'name' => $language['name'],
 				'code' => $label,
 				'url' => $url,
+				'generate_url' => $root . '/eleads-yml/api/generate?lang=' . rawurlencode($label),
+				'status_url' => $root . '/eleads-yml/api/status?lang=' . rawurlencode($label),
 			];
 		}
 		return $urls;

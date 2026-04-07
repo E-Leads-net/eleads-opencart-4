@@ -13,19 +13,171 @@ class Eleads extends \Opencart\System\Engine\Controller {
 		$feed_lang = $this->normalizeFeedLang($feed_lang);
 
 		$request_key = isset($this->request->get['key']) ? (string)$this->request->get['key'] : '';
+		$settings = (new \EleadsOcAdapter($this->registry))->getSettings();
 
-		$adapter = new \EleadsOcAdapter($this->registry);
-		$lang_code = $adapter->resolveLanguageCode($feed_lang);
-		$engine = new \EleadsFeedEngine();
-		$result = $engine->build($adapter, $lang_code, $feed_lang, $request_key);
-
-		if (!$result['ok']) {
+		if (!\EleadsAccessGuard::allowFeed(isset($settings['access_key']) ? $settings['access_key'] : '', $request_key)) {
 			$this->response->addHeader('HTTP/1.1 403 Forbidden');
 			return;
 		}
 
-		$this->response->addHeader('Content-Type: application/xml; charset=utf-8');
-		$this->response->setOutput($result['xml']);
+		$manager = new \EleadsFeedJobManager($this->registry);
+		$file = $manager->getReadyFile($feed_lang);
+
+		if ($file === '') {
+			$this->response->addHeader('HTTP/1.1 404 Not Found');
+			return;
+		}
+
+		$this->streamFeedFile($file);
+	}
+
+	public function generateFeed(): void {
+		require_once DIR_EXTENSION . 'eleads/system/library/eleads/bootstrap.php';
+		require_once DIR_EXTENSION . 'eleads/system/library/eleads/oc_adapter.php';
+
+		if (($this->request->server['REQUEST_METHOD'] ?? '') !== 'POST') {
+			$this->jsonError(405, 'method_not_allowed');
+			return;
+		}
+
+		if (!$this->authorizeApiRequest()) {
+			return;
+		}
+
+		$payload = json_decode((string)file_get_contents('php://input'), true);
+		$requested_lang = isset($this->request->get['lang']) ? (string)$this->request->get['lang'] : '';
+		if ($requested_lang === '' && is_array($payload) && !empty($payload['lang'])) {
+			$requested_lang = (string)$payload['lang'];
+		}
+		if ($requested_lang === '') {
+			$requested_lang = (string)$this->config->get('config_language');
+		}
+
+		$feed_lang = $this->normalizeFeedLang($requested_lang);
+		$adapter = new \EleadsOcAdapter($this->registry);
+		$lang_code = $adapter->resolveLanguageCode($feed_lang);
+		$manager = new \EleadsFeedJobManager($this->registry);
+		$result = $manager->start($adapter, $lang_code, $feed_lang);
+
+		if (empty($result['ok'])) {
+			$this->jsonError(500, !empty($result['error']) ? $result['error'] : 'generation_failed');
+			return;
+		}
+
+		$this->response->addHeader('Content-Type: application/json');
+		$this->response->setOutput(json_encode([
+			'status' => 'accepted',
+			'lang' => $feed_lang,
+			'job' => $this->formatFeedJobStatus($result),
+		]));
+	}
+
+	public function feedStatus(): void {
+		require_once DIR_EXTENSION . 'eleads/system/library/eleads/bootstrap.php';
+		require_once DIR_EXTENSION . 'eleads/system/library/eleads/oc_adapter.php';
+
+		if (($this->request->server['REQUEST_METHOD'] ?? '') !== 'GET') {
+			$this->jsonError(405, 'method_not_allowed');
+			return;
+		}
+
+		if (!$this->authorizeApiRequest()) {
+			return;
+		}
+
+		$requested_lang = isset($this->request->get['lang']) ? (string)$this->request->get['lang'] : '';
+		if ($requested_lang === '') {
+			$requested_lang = (string)$this->config->get('config_language');
+		}
+
+		$feed_lang = $this->normalizeFeedLang($requested_lang);
+		$adapter = new \EleadsOcAdapter($this->registry);
+		$lang_code = $adapter->resolveLanguageCode($feed_lang);
+		$manager = new \EleadsFeedJobManager($this->registry);
+		$result = $manager->processStep($adapter, $lang_code, $feed_lang);
+
+		if (empty($result['ok'])) {
+			$this->jsonError(500, !empty($result['error']) ? $result['error'] : 'generation_failed');
+			return;
+		}
+
+		$this->response->addHeader('Content-Type: application/json');
+		$this->response->setOutput(json_encode($this->formatFeedJobStatus($result)));
+	}
+
+	private function streamFeedFile(string $file): void {
+		if ($file === '' || !is_file($file)) {
+			$this->response->addHeader('HTTP/1.1 500 Internal Server Error');
+			return;
+		}
+
+		foreach (headers_list() as $header) {
+			if (stripos($header, 'Content-Type:') === 0) {
+				header_remove('Content-Type');
+				break;
+			}
+		}
+		foreach (headers_list() as $header) {
+			if (stripos($header, 'Content-Length:') === 0) {
+				header_remove('Content-Length');
+				break;
+			}
+		}
+
+		header('Content-Type: application/xml; charset=utf-8', true);
+		header('Content-Length: ' . filesize($file), true);
+
+		$handle = fopen($file, 'rb');
+		if ($handle) {
+			while (!feof($handle)) {
+				echo fread($handle, 65536);
+			}
+			fclose($handle);
+		}
+
+		exit;
+	}
+
+	private function authorizeApiRequest(): bool {
+		$api_key = (string)$this->config->get('module_eleads_api_key');
+		if ($api_key === '') {
+			$this->jsonError(401, 'api_key_missing');
+			return false;
+		}
+
+		$auth = $this->getBearerToken();
+		if ($auth === '' || !hash_equals($api_key, $auth)) {
+			$this->jsonError(401, 'unauthorized');
+			return false;
+		}
+
+		return true;
+	}
+
+	private function jsonError(int $status_code, string $error): void {
+		$status_map = [
+			401 => 'HTTP/1.1 401 Unauthorized',
+			404 => 'HTTP/1.1 404 Not Found',
+			405 => 'HTTP/1.1 405 Method Not Allowed',
+			422 => 'HTTP/1.1 422 Unprocessable Entity',
+			500 => 'HTTP/1.1 500 Internal Server Error',
+		];
+		$this->response->addHeader($status_map[$status_code] ?? 'HTTP/1.1 500 Internal Server Error');
+		$this->response->addHeader('Content-Type: application/json');
+		$this->response->setOutput(json_encode(['error' => $error]));
+	}
+
+	private function formatFeedJobStatus(array $result): array {
+		return [
+			'status' => $result['status'] ?? 'idle',
+			'lang' => $result['lang'] ?? '',
+			'processed' => isset($result['processed']) ? (int)$result['processed'] : 0,
+			'batch_size' => isset($result['batch_size']) ? (int)$result['batch_size'] : 0,
+			'updated_at' => $result['updated_at'] ?? '',
+			'finished_at' => $result['finished_at'] ?? '',
+			'size' => isset($result['size']) ? (int)$result['size'] : 0,
+			'error' => $result['error'] ?? '',
+		];
 	}
 
 	public function sitemapSync(): void {

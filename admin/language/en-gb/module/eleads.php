@@ -52,6 +52,14 @@ $_['tab_update'] = 'Update';
 // Buttons
 $_['button_save'] = 'Save';
 $_['button_back'] = 'Back';
+$_['button_generate'] = 'Generate';
+
+// Feed status
+$_['text_feed_idle'] = 'Not generated';
+$_['text_feed_running'] = 'Generating...';
+$_['text_feed_ready'] = 'Ready';
+$_['text_feed_failed'] = 'Failed';
+$_['text_feed_accepted'] = 'Started';
 
 // Error
 $_['error_permission'] = 'Warning: You do not have permission to modify E-Leads module.';
