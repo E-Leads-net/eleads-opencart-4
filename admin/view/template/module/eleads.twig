@@ -35,8 +35,8 @@
       #content .eleads-tree-toggle::after {content: "+";}
       #content .eleads-tree-item.is-open > .eleads-tree-toggle::after {content: "−";}
       #content .eleads-tree-spacer {display: inline-block; width: 18px; height: 18px;}
-      #content .eleads-tree-label {display: inline-flex; align-items: center; gap: 8px; cursor: pointer;}
-      #content .eleads-tree-label input {position: absolute; opacity: 0; pointer-events: none;}
+      #content .eleads-tree-label {display: inline-flex; align-items: center; gap: 8px; cursor: pointer; position: relative;}
+      #content .eleads-tree-label input {position: absolute; left: 0; top: 0; width: 16px; height: 16px; margin: 0; opacity: 0; pointer-events: none;}
       #content .eleads-tree-box {width: 16px; height: 16px; border: 1px solid #94a3b8; border-radius: 4px; background: #f8fafc; display: inline-flex; align-items: center; justify-content: center; color: #0f172a; font-size: 12px; line-height: 1;}
       #content .eleads-tree-label input:checked + .eleads-tree-box {background: #d1fae5; border-color: #86efac;}
       #content .eleads-tree-label input:checked + .eleads-tree-box::after {content: "+";}
@@ -159,8 +159,8 @@
             <label class="col-sm-2 col-form-label">{{ entry_categories }}</label>
             <div class="col-sm-10">
               <div class="btn-group btn-group-sm mb-2 eleads-btn-group" role="group">
-                <button type="button" class="btn btn-light" id="eleads-categories-all" onclick="eleadsSelectAllCategories(true)">Select all</button>
-                <button type="button" class="btn btn-light" id="eleads-categories-none" onclick="eleadsSelectAllCategories(false)">Select none</button>
+                <button type="button" class="btn btn-light" id="eleads-categories-all">Select all</button>
+                <button type="button" class="btn btn-light" id="eleads-categories-none">Select none</button>
               </div>
               <div class="eleads-tree" id="eleads-categories-tree">
                 {{ categories_tree_html|raw }}
@@ -381,18 +381,6 @@
       accepted: {{ text_feed_accepted|json_encode|raw }}
     };
 
-    window.eleadsSelectAllCategories = function(checked) {
-      var tree = document.getElementById('eleads-categories-tree');
-      if (!tree) return;
-      var boxes = tree.querySelectorAll('input[type="checkbox"]');
-      Array.prototype.forEach.call(boxes, function(cb) {
-        cb.checked = checked;
-        cb.indeterminate = false;
-        var label = cb.closest('.eleads-tree-label');
-        if (label) label.classList.remove('is-indeterminate');
-      });
-    };
-
     var allBtn = document.getElementById('eleads-categories-all');
     var noneBtn = document.getElementById('eleads-categories-none');
     var tree = document.getElementById('eleads-categories-tree');
@@ -501,94 +489,146 @@
       return tree.querySelectorAll('input[type="checkbox"][name="module_eleads_categories[]"]');
     }
 
+    function closestByClass(node, className) {
+      while (node && node !== document) {
+        if (node.classList && node.classList.contains(className)) {
+          return node;
+        }
+        node = node.parentNode;
+      }
+
+      return null;
+    }
+
+    function closestInput(node) {
+      while (node && node !== document) {
+        if (node.tagName && node.tagName.toLowerCase() === 'input') {
+          return node;
+        }
+        node = node.parentNode;
+      }
+
+      return null;
+    }
+
     function setLabelState(input) {
-      var label = input.closest('.eleads-tree-label');
+      var label = closestByClass(input, 'eleads-tree-label');
       if (!label) return;
-      if (input.indeterminate) {
-        label.classList.add('is-indeterminate');
-      } else {
+      if (!input.indeterminate) {
         label.classList.remove('is-indeterminate');
       }
     }
 
     function updateNodeState(li) {
       if (!li) return;
-      var checkbox = li.querySelector('.eleads-tree-label input[type="checkbox"]');
-      var childrenWrap = li.getElementsByClassName('eleads-tree-children')[0];
+      var label = null;
+      for (var i = 0; i < li.children.length; i++) {
+        if (li.children[i].classList && li.children[i].classList.contains('eleads-tree-label')) {
+          label = li.children[i];
+          break;
+        }
+      }
+      var checkbox = label ? label.querySelector('input[type="checkbox"]') : null;
+      var childrenWrap = null;
+      for (var j = 0; j < li.children.length; j++) {
+        if (li.children[j].classList && li.children[j].classList.contains('eleads-tree-children')) {
+          childrenWrap = li.children[j];
+          break;
+        }
+      }
       if (!checkbox || !childrenWrap) return;
-      var children = childrenWrap.querySelectorAll('input[type="checkbox"]');
+      var children = [];
+      var childList = null;
+      for (var k = 0; k < childrenWrap.children.length; k++) {
+        if (childrenWrap.children[k].classList && childrenWrap.children[k].classList.contains('eleads-tree-list')) {
+          childList = childrenWrap.children[k];
+          break;
+        }
+      }
+      if (childList) {
+        for (var m = 0; m < childList.children.length; m++) {
+          var childItem = childList.children[m];
+          if (!childItem.classList || !childItem.classList.contains('eleads-tree-item')) continue;
+          for (var n = 0; n < childItem.children.length; n++) {
+            var childLabel = childItem.children[n];
+            if (!childLabel.classList || !childLabel.classList.contains('eleads-tree-label')) continue;
+            var childInput = childLabel.querySelector('input[type="checkbox"]');
+            if (childInput) {
+              children.push(childInput);
+            }
+            break;
+          }
+        }
+      }
       if (!children.length) return;
       var checkedCount = 0;
-      var indeterminateCount = 0;
+      var partialCount = 0;
       Array.prototype.forEach.call(children, function(cb) {
-        if (cb.indeterminate) indeterminateCount++;
+        var childLabel = closestByClass(cb, 'eleads-tree-label');
+        if ((childLabel && childLabel.classList.contains('is-indeterminate')) || cb.indeterminate) partialCount++;
         if (cb.checked) checkedCount++;
       });
-      if (checkedCount === children.length) {
-        checkbox.checked = true;
-        checkbox.indeterminate = false;
-      } else if (checkedCount === 0 && indeterminateCount === 0) {
-        checkbox.checked = false;
-        checkbox.indeterminate = false;
+      var label = closestByClass(checkbox, 'eleads-tree-label');
+      if (!label) return;
+
+      checkbox.indeterminate = false;
+      if ((checkedCount > 0 && checkedCount < children.length) || partialCount > 0) {
+        label.classList.add('is-indeterminate');
       } else {
-        checkbox.checked = false;
-        checkbox.indeterminate = true;
+        label.classList.remove('is-indeterminate');
       }
-      setLabelState(checkbox);
     }
 
     function updateParents(li) {
-      var parent = li.parentElement;
+      var parent = li.parentNode;
       while (parent && parent !== tree) {
         if (parent.classList && parent.classList.contains('eleads-tree-item')) {
           updateNodeState(parent);
         }
-        parent = parent.parentElement;
+        parent = parent.parentNode;
       }
     }
 
     function setChildren(li, checked) {
-      var children = li.querySelectorAll('.eleads-tree-children input[type="checkbox"]');
+      var childrenWrap = null;
+      for (var i = 0; i < li.children.length; i++) {
+        if (li.children[i].classList && li.children[i].classList.contains('eleads-tree-children')) {
+          childrenWrap = li.children[i];
+          break;
+        }
+      }
+      if (!childrenWrap) return;
+
+      var children = childrenWrap.querySelectorAll('input[type="checkbox"][name="module_eleads_categories[]"]');
       Array.prototype.forEach.call(children, function(cb) {
         cb.checked = checked;
         cb.indeterminate = false;
-        setLabelState(cb);
+        var label = closestByClass(cb, 'eleads-tree-label');
+        if (label) {
+          label.classList.remove('is-indeterminate');
+        }
       });
     }
 
     function initTreeState() {
       var items = tree.querySelectorAll('.eleads-tree-item');
-      Array.prototype.forEach.call(items, function(li) {
+      Array.prototype.forEach.call(Array.prototype.slice.call(items).reverse(), function(li) {
         updateNodeState(li);
-      });
-      Array.prototype.forEach.call(items, function(li) {
-        var childrenWrap = li.getElementsByClassName('eleads-tree-children')[0];
-        if (!childrenWrap) return;
-        var children = childrenWrap.querySelectorAll('input[type="checkbox"]');
-        var open = false;
-        Array.prototype.forEach.call(children, function(cb) {
-          if (cb.checked || cb.indeterminate) {
-            open = true;
-          }
-        });
-        if (open) {
-          li.classList.add('is-open');
-        }
       });
     }
 
     tree.addEventListener('click', function(e) {
-      var toggle = e.target.closest('.eleads-tree-toggle');
+      var toggle = closestByClass(e.target, 'eleads-tree-toggle');
       if (toggle) {
-        var li = toggle.closest('.eleads-tree-item');
+        var li = closestByClass(toggle, 'eleads-tree-item');
         if (li) li.classList.toggle('is-open');
       }
     });
 
     tree.addEventListener('change', function(e) {
-      var input = e.target;
-      if (!input.matches('input[type="checkbox"][name="module_eleads_categories[]"]')) return;
-      var li = input.closest('.eleads-tree-item');
+      var input = closestInput(e.target);
+      if (!input || input.type !== 'checkbox' || input.name !== 'module_eleads_categories[]') return;
+      var li = closestByClass(input, 'eleads-tree-item');
       if (!li) return;
       input.indeterminate = false;
       setLabelState(input);
